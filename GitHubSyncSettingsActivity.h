@@ -1,0 +1,25 @@
+#pragma once
+
+#include "activities/Activity.h"
+#include "GitHubSync.h"
+#include "util/ButtonNavigator.h"
+
+class GitHubSyncSettingsActivity final : public Activity {
+public:
+  explicit GitHubSyncSettingsActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)
+      : Activity("GitHubSync", renderer, mappedInput) {}
+
+  void onEnter() override;
+  void onExit() override;
+  void loop() override;
+  void render(RenderLock&&) override;
+
+private:
+  ButtonNavigator buttonNavigator;
+  int selectedIndex = 0;
+
+  static constexpr int MENU_ITEMS = 5;
+
+  void handleSelection();
+  std::string getMasked(const std::string& s) const;
+};
