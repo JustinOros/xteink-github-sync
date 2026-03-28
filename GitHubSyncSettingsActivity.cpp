@@ -2,19 +2,26 @@
 
 #include <GfxRenderer.h>
 #include <I18n.h>
+#include <WiFi.h>
 
 #include "MappedInputManager.h"
 #include "activities/util/KeyboardEntryActivity.h"
+#include "activities/network/WifiSelectionActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 
 namespace {
-constexpr int MENU_ITEMS = 5;
+constexpr int MENU_ITEMS = 7;
+constexpr int WIFI_STATUS_INDEX = 4;
+constexpr int SYNC_NOW_INDEX = 5;
+constexpr int SAVE_INDEX = 6;
 const char* menuNames[MENU_ITEMS] = {
     "Username",
     "Token (PAT)",
     "Repo",
     "Branch",
+    "WiFi",
+    "Sync Now",
     "Save"
 };
 }
@@ -31,6 +38,19 @@ void GitHubSyncSettingsActivity::onExit() {
 
 std::string GitHubSyncSettingsActivity::getMasked(const std::string &s) const {
     return s.empty() ? "" : "••••••••";
+}
+
+void GitHubSyncSettingsActivity::doSync() {
+    GitHubSyncConfig cfg;
+    GitHubSync::loadConfig(cfg);
+    LOG_INF("SYNC", "user='%s' repo='%s' branch='%s' pat_len=%d",
+        cfg.username.c_str(), cfg.repo.c_str(), cfg.branch.c_str(), (int)cfg.pat.size());
+    syncStatus = "Syncing...";
+    requestUpdate();
+    GitHubSyncResult result = GitHubSync::sync();
+    syncStatus = GitHubSync::resultMessage(result);
+    LOG_INF("SYNC", "result: %s", syncStatus.c_str());
+    requestUpdate();
 }
 
 void GitHubSyncSettingsActivity::handleSelection() {
@@ -88,7 +108,25 @@ void GitHubSyncSettingsActivity::handleSelection() {
                     GitHubSync::saveConfig(c);
                 }
             });
-    } else if (selectedIndex == 4) {
+    } else if (selectedIndex == SYNC_NOW_INDEX) {
+        if (WiFi.status() != WL_CONNECTED) {
+            syncStatus = "Connecting to WiFi...";
+            requestUpdate();
+            startActivityForResult(
+                std::make_unique<WifiSelectionActivity>(renderer, mappedInput),
+                [this](const ActivityResult &result) {
+                    if (WiFi.status() != WL_CONNECTED) {
+                        syncStatus = "No WiFi — sync cancelled";
+                        requestUpdate();
+                        return;
+                    }
+                    doSync();
+                });
+        } else {
+            doSync();
+        }
+        requestUpdate();
+    } else if (selectedIndex == SAVE_INDEX) {
         finish();
     }
 }
@@ -106,11 +144,15 @@ void GitHubSyncSettingsActivity::loop() {
 
     buttonNavigator.onNext([this] {
         selectedIndex = (selectedIndex + 1) % MENU_ITEMS;
+        if (selectedIndex == WIFI_STATUS_INDEX)
+            selectedIndex = (selectedIndex + 1) % MENU_ITEMS;
         requestUpdate();
     });
 
     buttonNavigator.onPrevious([this] {
         selectedIndex = (selectedIndex + MENU_ITEMS - 1) % MENU_ITEMS;
+        if (selectedIndex == WIFI_STATUS_INDEX)
+            selectedIndex = (selectedIndex + MENU_ITEMS - 1) % MENU_ITEMS;
         requestUpdate();
     });
 }
@@ -140,6 +182,9 @@ void GitHubSyncSettingsActivity::render(RenderLock &&) {
             if (index == 1) return cfg.pat.empty()      ? "(not set)" : getMasked(cfg.pat);
             if (index == 2) return cfg.repo.empty()     ? "xteink"    : cfg.repo;
             if (index == 3) return cfg.branch.empty()   ? "main"      : cfg.branch;
+            if (index == WIFI_STATUS_INDEX)
+                return WiFi.status() == WL_CONNECTED ? "Connected" : "Not connected";
+            if (index == SYNC_NOW_INDEX) return syncStatus;
             return "";
         },
         true);

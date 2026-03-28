@@ -588,7 +588,7 @@ def prompt_for_upload_port(existing_port: str | None) -> str | None:
 
     current_ports = list_likely_serial_ports()
     if current_ports:
-        entered = input("  Upload port (recommended, e.g. /dev/cu.usbmodemXXXX; Enter for auto-detect): ").strip()
+        entered = input("  Upload port (recommended, e.g. /dev/cu.usbmodemXXXX; Press ENTER for auto-detect): ").strip()
         if entered:
             return entered
         warn("Proceeding with auto-detect. This may choose a non-USB port (like Bluetooth).")

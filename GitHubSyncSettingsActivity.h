@@ -17,9 +17,11 @@ public:
 private:
   ButtonNavigator buttonNavigator;
   int selectedIndex = 0;
+  std::string syncStatus;
 
-  static constexpr int MENU_ITEMS = 5;
+  static constexpr int MENU_ITEMS = 7;
 
   void handleSelection();
+  void doSync();
   std::string getMasked(const std::string& s) const;
 };

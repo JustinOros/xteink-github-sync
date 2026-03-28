@@ -4,6 +4,7 @@
 #include <Preferences.h>
 #include <SD.h>
 #include <WiFi.h>
+#include <Logging.h>
 
 #define GH_PREFS_NS   "github_sync"
 #define GH_KEY_USER   "username"
@@ -44,15 +45,15 @@ bool GitHubSync::isConfigured() {
 
 const char* GitHubSync::resultMessage(GitHubSyncResult r) {
     switch (r) {
-        case GitHubSyncResult::OK:             return "GitHub sync complete";
-        case GitHubSyncResult::NOT_CONFIGURED: return "GitHub sync: not configured";
-        case GitHubSyncResult::NO_WIFI:        return "GitHub sync: no WiFi";
-        case GitHubSyncResult::AUTH_ERROR:     return "GitHub sync: auth failed (check PAT)";
-        case GitHubSyncResult::REPO_NOT_FOUND: return "GitHub sync: repo not found";
-        case GitHubSyncResult::API_ERROR:      return "GitHub sync: API error";
-        case GitHubSyncResult::SD_ERROR:       return "GitHub sync: SD card error";
-        case GitHubSyncResult::PARSE_ERROR:    return "GitHub sync: bad API response";
-        default:                               return "GitHub sync: unknown error";
+        case GitHubSyncResult::OK:             return "Sync complete";
+        case GitHubSyncResult::NOT_CONFIGURED: return "Not configured";
+        case GitHubSyncResult::NO_WIFI:        return "No WiFi";
+        case GitHubSyncResult::AUTH_ERROR:     return "Auth failed (check PAT)";
+        case GitHubSyncResult::REPO_NOT_FOUND: return "Repo not found";
+        case GitHubSyncResult::API_ERROR:      return "API error";
+        case GitHubSyncResult::SD_ERROR:       return "SD card error";
+        case GitHubSyncResult::PARSE_ERROR:    return "Bad API response";
+        default:                               return "Unknown error";
     }
 }
 
@@ -92,6 +93,7 @@ bool GitHubSync::fetchFileList(const GitHubSyncConfig &cfg, std::string &outJson
     http.addHeader("User-Agent", "CrossPoint-X4");
 
     int code = http.GET();
+    LOG_INF("SYNC", "fetchFileList HTTP code: %d", code);
     if (code == 401 || code == 403) { http.end(); err = GitHubSyncResult::AUTH_ERROR;     return false; }
     if (code == 404)                { http.end(); err = GitHubSyncResult::REPO_NOT_FOUND; return false; }
     if (code != 200)                { http.end(); err = GitHubSyncResult::API_ERROR;      return false; }
@@ -101,21 +103,19 @@ bool GitHubSync::fetchFileList(const GitHubSyncConfig &cfg, std::string &outJson
     return true;
 }
 
-bool GitHubSync::downloadFile(const GitHubSyncConfig &cfg, const std::string &path, const std::string &sha, GitHubSyncResult &err) {
-    std::string url = std::string(GH_API_BASE) + "/repos/" + cfg.username + "/" +
-                      cfg.repo + "/contents/" + path + "?ref=" + cfg.branch;
-
+bool GitHubSync::downloadFile(const GitHubSyncConfig &cfg, const std::string &downloadUrl, const std::string &name, const std::string &sha, GitHubSyncResult &err) {
     HTTPClient http;
-    http.begin(url.c_str());
+    http.begin(downloadUrl.c_str());
     http.addHeader("Authorization", ("token " + cfg.pat).c_str());
-    http.addHeader("Accept", "application/vnd.github.v3.raw");
     http.addHeader("User-Agent", "CrossPoint-X4");
 
     int code = http.GET();
+    LOG_INF("SYNC", "downloadFile '%s' HTTP code: %d", name.c_str(), code);
     if (code == 401 || code == 403) { http.end(); err = GitHubSyncResult::AUTH_ERROR; return false; }
     if (code != 200)                { http.end(); err = GitHubSyncResult::API_ERROR;  return false; }
 
-    std::string destPath = (path == GH_SLEEP_BMP) ? GH_SLEEP_PATH : std::string(GH_BOOKS_DIR) + path;
+    std::string destPath = (name == GH_SLEEP_BMP) ? GH_SLEEP_PATH : std::string(GH_BOOKS_DIR) + name;
+    LOG_INF("SYNC", "Writing to SD path: '%s'", destPath.c_str());
 
     File f = SD.open(destPath.c_str(), FILE_WRITE);
     if (!f) { http.end(); err = GitHubSyncResult::SD_ERROR; return false; }
@@ -137,7 +137,7 @@ bool GitHubSync::downloadFile(const GitHubSyncConfig &cfg, const std::string &pa
 
     f.close();
     http.end();
-    saveLocalSha(path, sha);
+    saveLocalSha(name, sha);
     return true;
 }
 
@@ -156,9 +156,10 @@ GitHubSyncResult GitHubSync::sync() {
 
     JsonArray files = doc.as<JsonArray>();
     for (JsonObject file : files) {
-        std::string type = file["type"].as<const char*>();
-        std::string name = file["name"].as<const char*>();
-        std::string sha  = file["sha"].as<const char*>();
+        std::string type        = file["type"].as<const char*>();
+        std::string name        = file["name"].as<const char*>();
+        std::string sha         = file["sha"].as<const char*>();
+        std::string downloadUrl = file["download_url"].as<const char*>();
 
         if (type != "file") continue;
 
@@ -166,11 +167,13 @@ GitHubSyncResult GitHubSync::sync() {
         bool isSleep = (name == GH_SLEEP_BMP);
 
         if (!isEpub && !isSleep) continue;
+        if (downloadUrl.empty()) continue;
 
         std::string localSha = loadLocalSha(name);
         if (localSha == sha) continue;
 
-        if (!downloadFile(cfg, name, sha, err)) return err;
+        LOG_INF("SYNC", "Downloading '%s'", name.c_str());
+        if (!downloadFile(cfg, downloadUrl, name, sha, err)) return err;
     }
 
     return GitHubSyncResult::OK;

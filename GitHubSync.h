@@ -31,7 +31,7 @@ public:
 
 private:
     static bool fetchFileList(const GitHubSyncConfig &cfg, std::string &outJson, GitHubSyncResult &err);
-    static bool downloadFile(const GitHubSyncConfig &cfg, const std::string &path, const std::string &sha, GitHubSyncResult &err);
+    static bool downloadFile(const GitHubSyncConfig &cfg, const std::string &downloadUrl, const std::string &name, const std::string &sha, GitHubSyncResult &err);
     static std::string loadLocalSha(const std::string &filename);
     static void saveLocalSha(const std::string &filename, const std::string &sha);
     static std::string shaFilePath(const std::string &filename);
