@@ -17,6 +17,7 @@ import json
 PATCH_DIR = Path(__file__).parent
 CROSSPOINT_URL = "https://github.com/crosspoint-reader/crosspoint-reader.git"
 NVS_NAMESPACE  = "github_sync"
+XTEINK_CONFIG_FILE = Path.home() / ".xteink"
 BOLD   = "\033[1m"
 GREEN  = "\033[92m"
 RED    = "\033[91m"
@@ -28,6 +29,31 @@ def ok(msg):   print(f"{GREEN}  ✓ {msg}{RESET}")
 def err(msg):  print(f"{RED}  ✗ {msg}{RESET}"); sys.exit(1)
 def warn(msg): print(f"{YELLOW}  ! {msg}{RESET}")
 def info(msg): print(f"  {msg}")
+
+def load_xteink_config() -> dict:
+    if not XTEINK_CONFIG_FILE.exists():
+        return {}
+    try:
+        with open(XTEINK_CONFIG_FILE, "r") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+def save_xteink_config(cfg: dict) -> None:
+    try:
+        saved = load_xteink_config()
+        if "username" in cfg:
+            saved["githubuser"] = cfg["username"]
+        if "repo" in cfg:
+            saved["githubrepo"] = cfg["repo"]
+        if "branch" in cfg:
+            saved["githubbranch"] = cfg["branch"]
+        with open(XTEINK_CONFIG_FILE, "w") as f:
+            json.dump(saved, f, indent=2)
+        ok(f"Config saved to {XTEINK_CONFIG_FILE}")
+    except Exception as e:
+        warn(f"Could not save config: {e}")
 
 def ensure_python_module(module_name: str, pip_package: str | None = None, *, description: str = "") -> None:
     """If import fails, prompt user (Press Enter) then pip install into this Python."""
@@ -248,10 +274,21 @@ def clone_or_update(dest: Path) -> Path:
 
 def prompt_github_config() -> dict:
     print(f"\n{BOLD}GitHub Sync Configuration{RESET}")
-    print(f"{CYAN}  Press Enter to skip and configure on-device later.{RESET}\n")
+    print(f"{CYAN}  Press Enter on any field to use the saved value, or type a new one.{RESET}")
+    print(f"{CYAN}  Leave GitHub username blank to skip and configure on-device later.{RESET}\n")
+
+    saved = load_xteink_config()
+
+    saved_user   = saved.get("githubuser", "")
+    saved_repo   = saved.get("githubrepo", "xteink")
+    saved_branch = saved.get("githubbranch", "main")
 
     while True:
-        username = input("  GitHub username: ").strip()
+        if saved_user:
+            raw = input(f"  GitHub username ({saved_user}): ").strip()
+            username = raw or saved_user
+        else:
+            username = input("  GitHub username: ").strip()
         if not username:
             return {}
         ensure_github_https_dependencies()
@@ -289,7 +326,8 @@ def prompt_github_config() -> dict:
             return {}
 
     while True:
-        repo = input("  Repo name [xteink]: ").strip() or "xteink"
+        raw = input(f"  Repo name ({saved_repo}): ").strip()
+        repo = raw or saved_repo
         owner_for_repo = authenticated_login or username
         ok_repo, msg = validate_repo_access(owner_for_repo, repo, pat)
         if ok_repo:
@@ -302,9 +340,12 @@ def prompt_github_config() -> dict:
         if retry == "n":
             return {}
 
-    branch = input("  Branch [main]: ").strip() or "main"
+    raw = input(f"  Branch ({saved_branch}): ").strip()
+    branch = raw or saved_branch
 
-    return {"username": username, "pat": pat, "repo": repo, "branch": branch}
+    cfg = {"username": username, "pat": pat, "repo": repo, "branch": branch}
+    save_xteink_config(cfg)
+    return cfg
 
 def write_nvs_partition(cfg: dict, repo: Path) -> Path:
     if not check_nvs_gen():
@@ -506,34 +547,59 @@ def list_likely_serial_ports() -> list[str]:
 
 def prompt_for_upload_port(existing_port: str | None) -> str | None:
     print(f"\n{BOLD}Ready to upload firmware{RESET}")
-    print(f"{CYAN}  Connect your xteink device via USB now, then press Enter.{RESET}")
-    input("  Press Enter when connected... ")
 
-    likely_ports = list_likely_serial_ports()
-    if likely_ports:
-        print("\n  Detected likely USB serial ports:")
-        for p in likely_ports:
-            print(f"   - {p}")
-    else:
-        warn("No obvious USB serial ports detected. You can still enter one manually.")
+    while True:
+        print(f"{CYAN}  Connect your xteink device via USB now, then press Enter.{RESET}")
+        input("  Press Enter when connected... ")
 
-    # Show PlatformIO's own device list as extra context.
-    device_list = subprocess.run(["pio", "device", "list"], capture_output=True, text=True)
-    if device_list.returncode == 0 and device_list.stdout.strip():
-        print("\n  PlatformIO device list:")
-        print(device_list.stdout.rstrip())
+        likely_ports = list_likely_serial_ports()
+
+        if not likely_ports:
+            device_list = subprocess.run(["pio", "device", "list"], capture_output=True, text=True)
+            pio_has_devices = device_list.returncode == 0 and device_list.stdout.strip()
+
+            if not pio_has_devices:
+                print(f"\n{YELLOW}  Please ensure your device is connected via USB to this computer and powered on.{RESET}")
+                print(f"  Retry? Y/N")
+                print(f"    Y / Enter = Retry scanning")
+                print(f"    N         = Proceed to enter port manually")
+                choice = input("  > ").strip().lower()
+                if choice == "n":
+                    warn("No USB serial ports detected. You can still enter one manually.")
+                    break
+                continue
+
+        if likely_ports:
+            print("\n  Detected likely USB serial ports:")
+            for p in likely_ports:
+                print(f"   - {p}")
+
+        device_list = subprocess.run(["pio", "device", "list"], capture_output=True, text=True)
+        if device_list.returncode == 0 and device_list.stdout.strip():
+            print("\n  PlatformIO device list:")
+            print(device_list.stdout.rstrip())
+
+        break
 
     if existing_port:
         info(f"Current upload port argument: {existing_port}")
         entered = input("  Upload port (Enter to keep current): ").strip()
         return entered or existing_port
 
-    entered = input("  Upload port (recommended, e.g. /dev/cu.usbmodemXXXX; Enter for auto-detect): ").strip()
-    if entered:
-        return entered
-
-    warn("Proceeding with auto-detect. This may choose a non-USB port (like Bluetooth).")
-    return None
+    current_ports = list_likely_serial_ports()
+    if current_ports:
+        entered = input("  Upload port (recommended, e.g. /dev/cu.usbmodemXXXX; Enter for auto-detect): ").strip()
+        if entered:
+            return entered
+        warn("Proceeding with auto-detect. This may choose a non-USB port (like Bluetooth).")
+        return None
+    else:
+        warn("No USB serial ports detected — auto-detect is disabled to prevent using a Bluetooth port.")
+        while True:
+            entered = input("  Enter upload port manually (e.g. /dev/cu.usbmodemXXXX): ").strip()
+            if entered:
+                return entered
+            warn("A port is required. Check your USB connection and try again, or Ctrl+C to quit.")
 
 def main():
     print(f"\n{BOLD}CrossPoint GitHub Sync Patcher{RESET}\n")
